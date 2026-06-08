@@ -3,10 +3,11 @@ import { formatPair, toUsdtSymbol } from "@/lib/pairs";
 import type { BaseAsset, Candle, ChartRange, QuoteAsset } from "@/lib/strategy-types";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "fra1";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_BATCHES = 12;
-const cache = new Map<string, { expires: number; candles: Candle[] }>();
+const cache = new Map<string, { expires: number; candles: Candle[]; source: string; sourceSymbols: string[] }>();
 
 type BinanceKline = [
   number,
@@ -150,14 +151,31 @@ async function fetchBybitDailyCandles(symbol: string, range: ChartRange, endTime
 }
 
 async function fetchUsdCandles(asset: BaseAsset | QuoteAsset, range: ChartRange, endTime: number) {
+  const symbol = toUsdtSymbol(asset);
   if (asset === "MNT") {
-    return fetchBybitDailyCandles("MNTUSDT", range, endTime);
+    return {
+      candles: await fetchBybitDailyCandles(symbol, range, endTime),
+      sourceSymbol: `bybit:${symbol}`
+    };
   }
-  return fetchDailyCandles(toUsdtSymbol(asset), range, endTime);
+
+  try {
+    return {
+      candles: await fetchDailyCandles(symbol, range, endTime),
+      sourceSymbol: `binance:${symbol}`
+    };
+  } catch {
+    return {
+      candles: await fetchBybitDailyCandles(symbol, range, endTime),
+      sourceSymbol: `bybit:${symbol}`
+    };
+  }
 }
 
-function getSourceSymbol(asset: BaseAsset | QuoteAsset) {
-  return asset === "MNT" ? "bybit:MNTUSDT" : toUsdtSymbol(asset);
+function getSourceName(sourceSymbols: string[]) {
+  if (sourceSymbols.every((symbol) => symbol.startsWith("binance:"))) return "binance-usdt-cross";
+  if (sourceSymbols.every((symbol) => symbol.startsWith("bybit:"))) return "bybit-usdt-cross";
+  return "mixed-usd-cross";
 }
 
 function buildCrossCandles(baseCandles: Candle[], quoteCandles: Candle[]) {
@@ -190,31 +208,37 @@ export async function GET(request: Request) {
   }
 
   const key = formatPair(quote, base);
-  const baseSymbol = getSourceSymbol(base);
-  const quoteSymbol = getSourceSymbol(quote);
   const cacheKey = `cross-usdt:${key}:${range}`;
-  const source = quote === "MNT" ? "mixed-usd-cross" : "binance-usdt-cross";
   const cached = cache.get(cacheKey);
   if (!forceRefresh && cached && cached.expires > Date.now()) {
-    return NextResponse.json({ pair: key, sourceSymbols: [baseSymbol, quoteSymbol], range, source, cached: true, candles: cached.candles });
+    return NextResponse.json({
+      pair: key,
+      sourceSymbols: cached.sourceSymbols,
+      range,
+      source: cached.source,
+      cached: true,
+      candles: cached.candles
+    });
   }
 
   try {
     const endTime = Date.now();
-    const [baseCandles, quoteCandles] = await Promise.all([
+    const [baseResult, quoteResult] = await Promise.all([
       fetchUsdCandles(base, range, endTime),
       fetchUsdCandles(quote, range, endTime)
     ]);
-    const candles = buildCrossCandles(baseCandles, quoteCandles);
+    const sourceSymbols = [baseResult.sourceSymbol, quoteResult.sourceSymbol];
+    const source = getSourceName(sourceSymbols);
+    const candles = buildCrossCandles(baseResult.candles, quoteResult.candles);
 
     if (candles.length === 0) {
-      return NextResponse.json({ error: `No daily USD-cross candles for ${key}`, pair: key, sourceSymbols: [baseSymbol, quoteSymbol] }, { status: 404 });
+      return NextResponse.json({ error: `No daily USD-cross candles for ${key}`, pair: key, sourceSymbols }, { status: 404 });
     }
 
-    cache.set(cacheKey, { expires: Date.now() + 10 * 60 * 1000, candles });
-    return NextResponse.json({ pair: key, sourceSymbols: [baseSymbol, quoteSymbol], range, source, cached: false, candles });
+    cache.set(cacheKey, { expires: Date.now() + 10 * 60 * 1000, candles, source, sourceSymbols });
+    return NextResponse.json({ pair: key, sourceSymbols, range, source, cached: false, candles });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown Binance API error";
-    return NextResponse.json({ error: message, pair: key, sourceSymbols: [baseSymbol, quoteSymbol] }, { status: 502 });
+    const message = error instanceof Error ? error.message : "Unknown market data API error";
+    return NextResponse.json({ error: message, pair: key }, { status: 502 });
   }
 }
