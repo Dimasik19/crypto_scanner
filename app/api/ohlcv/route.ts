@@ -42,6 +42,30 @@ type BybitKlineResponse = {
   };
 };
 
+type CoinGeckoMarketChartResponse = {
+  prices?: [number, number][];
+};
+
+const coinGeckoIds: Record<BaseAsset | QuoteAsset, string> = {
+  ADA: "cardano",
+  AVAX: "avalanche-2",
+  BNB: "binancecoin",
+  BTC: "bitcoin",
+  DOGE: "dogecoin",
+  DOT: "polkadot",
+  ETH: "ethereum",
+  LINK: "chainlink",
+  LTC: "litecoin",
+  MATIC: "matic-network",
+  MNT: "mantle",
+  NEAR: "near",
+  SOL: "solana",
+  SUI: "sui",
+  TAO: "bittensor",
+  TON: "the-open-network",
+  XRP: "ripple"
+};
+
 function getStartTime(range: ChartRange, endTime: number) {
   if (range === "1Y") return endTime - 365 * DAY_MS;
   if (range === "3Y") return endTime - 365 * 3 * DAY_MS;
@@ -150,13 +174,55 @@ async function fetchBybitDailyCandles(symbol: string, range: ChartRange, endTime
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
+async function fetchCoinGeckoDailyCandles(asset: BaseAsset | QuoteAsset, range: ChartRange, endTime: number) {
+  const coinId = coinGeckoIds[asset];
+  const url = new URL(`https://api.coingecko.com/api/v3/coins/${coinId}/market_chart/range`);
+  url.searchParams.set("vs_currency", "usd");
+  url.searchParams.set("from", String(Math.floor(getStartTime(range, endTime) / 1000)));
+  url.searchParams.set("to", String(Math.floor(endTime / 1000)));
+  url.searchParams.set("interval", "daily");
+  url.searchParams.set("precision", "full");
+
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: {
+      accept: "application/json"
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`CoinGecko returned ${response.status}`);
+  }
+
+  const payload = (await response.json()) as CoinGeckoMarketChartResponse;
+  const seen = new Set<string>();
+  return (payload.prices ?? [])
+    .map(([timestamp, close]) => ({
+      time: Math.floor(timestamp / 1000),
+      date: new Date(timestamp).toISOString().slice(0, 10),
+      close: Number(close)
+    }))
+    .filter((item) => {
+      if (!Number.isFinite(item.close) || item.close <= 0 || seen.has(item.date)) return false;
+      seen.add(item.date);
+      return true;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 async function fetchUsdCandles(asset: BaseAsset | QuoteAsset, range: ChartRange, endTime: number) {
   const symbol = toUsdtSymbol(asset);
   if (asset === "MNT") {
-    return {
-      candles: await fetchBybitDailyCandles(symbol, range, endTime),
-      sourceSymbol: `bybit:${symbol}`
-    };
+    try {
+      return {
+        candles: await fetchBybitDailyCandles(symbol, range, endTime),
+        sourceSymbol: `bybit:${symbol}`
+      };
+    } catch {
+      return {
+        candles: await fetchCoinGeckoDailyCandles(asset, range, endTime),
+        sourceSymbol: `coingecko:${coinGeckoIds[asset]}`
+      };
+    }
   }
 
   try {
@@ -165,16 +231,24 @@ async function fetchUsdCandles(asset: BaseAsset | QuoteAsset, range: ChartRange,
       sourceSymbol: `binance:${symbol}`
     };
   } catch {
-    return {
-      candles: await fetchBybitDailyCandles(symbol, range, endTime),
-      sourceSymbol: `bybit:${symbol}`
-    };
+    try {
+      return {
+        candles: await fetchBybitDailyCandles(symbol, range, endTime),
+        sourceSymbol: `bybit:${symbol}`
+      };
+    } catch {
+      return {
+        candles: await fetchCoinGeckoDailyCandles(asset, range, endTime),
+        sourceSymbol: `coingecko:${coinGeckoIds[asset]}`
+      };
+    }
   }
 }
 
 function getSourceName(sourceSymbols: string[]) {
   if (sourceSymbols.every((symbol) => symbol.startsWith("binance:"))) return "binance-usdt-cross";
   if (sourceSymbols.every((symbol) => symbol.startsWith("bybit:"))) return "bybit-usdt-cross";
+  if (sourceSymbols.every((symbol) => symbol.startsWith("coingecko:"))) return "coingecko-usd-cross";
   return "mixed-usd-cross";
 }
 
