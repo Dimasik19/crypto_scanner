@@ -8,6 +8,7 @@ export const preferredRegion = "fra1";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_BATCHES = 12;
 const cache = new Map<string, { expires: number; candles: Candle[]; source: string; sourceSymbols: string[] }>();
+const usdCache = new Map<string, { expires: number; candles: Candle[]; sourceSymbol: string }>();
 
 type BinanceKline = [
   number,
@@ -210,37 +211,51 @@ async function fetchCoinGeckoDailyCandles(asset: BaseAsset | QuoteAsset, range: 
 }
 
 async function fetchUsdCandles(asset: BaseAsset | QuoteAsset, range: ChartRange, endTime: number) {
+  const cacheKey = `usd:${asset}:${range}`;
+  const cached = usdCache.get(cacheKey);
+  if (cached && cached.expires > Date.now()) {
+    return {
+      candles: cached.candles,
+      sourceSymbol: cached.sourceSymbol
+    };
+  }
+
   const symbol = toUsdtSymbol(asset);
+  const save = (result: { candles: Candle[]; sourceSymbol: string }) => {
+    usdCache.set(cacheKey, { ...result, expires: Date.now() + 30 * 60 * 1000 });
+    return result;
+  };
+
   if (asset === "MNT") {
     try {
-      return {
+      return save({
         candles: await fetchBybitDailyCandles(symbol, range, endTime),
         sourceSymbol: `bybit:${symbol}`
-      };
+      });
     } catch {
-      return {
+      return save({
         candles: await fetchCoinGeckoDailyCandles(asset, range, endTime),
         sourceSymbol: `coingecko:${coinGeckoIds[asset]}`
-      };
+      });
     }
   }
 
   try {
-    return {
+    return save({
       candles: await fetchDailyCandles(symbol, range, endTime),
       sourceSymbol: `binance:${symbol}`
-    };
+    });
   } catch {
     try {
-      return {
+      return save({
         candles: await fetchBybitDailyCandles(symbol, range, endTime),
         sourceSymbol: `bybit:${symbol}`
-      };
+      });
     } catch {
-      return {
+      return save({
         candles: await fetchCoinGeckoDailyCandles(asset, range, endTime),
         sourceSymbol: `coingecko:${coinGeckoIds[asset]}`
-      };
+      });
     }
   }
 }

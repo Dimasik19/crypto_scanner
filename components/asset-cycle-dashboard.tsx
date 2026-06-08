@@ -84,6 +84,10 @@ function pairCacheKey(baseAsset: BaseAsset, quoteAsset: QuoteAsset) {
   return `${baseAsset}/${quoteAsset}`;
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 async function fetchLatestPairPrice(baseAsset: BaseAsset, quoteAsset: QuoteAsset) {
   const response = await fetch(`/api/ohlcv?base=${baseAsset}&quote=${quoteAsset}&range=1Y&refresh=1`);
   const payload = (await response.json()) as OhlcvPayload;
@@ -547,21 +551,26 @@ function HeatMapDrawer({
       setError(null);
       setFailedCount(0);
       const requestId = Date.now();
+      const forceRefresh = refreshNonce > 0;
 
       try {
-        const results = await Promise.all(getQuoteAssets(baseAsset).map(async (quoteAsset) => {
+        const results: Array<HeatMapCell | null> = [];
+        for (const quoteAsset of getQuoteAssets(baseAsset)) {
+          if (cancelled) break;
           try {
-            const response = await fetch(`/api/ohlcv?base=${baseAsset}&quote=${quoteAsset}&range=${range}&refresh=1&t=${requestId}`, {
-              cache: "no-store"
-            });
+            const refreshParams = forceRefresh ? `&refresh=1&t=${requestId}` : "";
+            const response = await fetch(`/api/ohlcv?base=${baseAsset}&quote=${quoteAsset}&range=${range}${refreshParams}`);
             const payload = (await response.json()) as OhlcvPayload;
-            if (!response.ok || !payload.candles || payload.candles.length === 0) return null;
+            if (!response.ok || !payload.candles || payload.candles.length === 0) {
+              results.push(null);
+              continue;
+            }
 
             const currentPrice = payload.candles.at(-1)?.close ?? 0;
             const averagePrice = payload.candles.reduce((sum, candle) => sum + candle.close, 0) / payload.candles.length;
             const levels = calculateRangeLevels(payload.candles);
 
-            return {
+            results.push({
               pair: formatPair(quoteAsset, baseAsset),
               quoteAsset,
               currentPrice,
@@ -569,11 +578,12 @@ function HeatMapDrawer({
               deviationPct: averagePrice > 0 ? ((currentPrice - averagePrice) / averagePrice) * 100 : 0,
               zone: getDecisionZone(currentPrice, levels),
               source: payload.source ?? "market-data"
-            };
+            });
           } catch {
-            return null;
+            results.push(null);
           }
-        }));
+          if (forceRefresh) await wait(250);
+        }
 
         if (!cancelled) {
           const nextCells = results.filter((cell): cell is HeatMapCell => cell !== null);
