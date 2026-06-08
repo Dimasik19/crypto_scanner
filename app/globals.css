@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --color-ink: 9 16 19;
+  --color-panel: 16 24 32;
+  --color-panel2: 23 33 42;
+  --color-grid: 38 51 60;
+  --body-text: #e9f6f6;
+  --body-bg:
+    linear-gradient(180deg, rgba(53, 213, 223, 0.08), transparent 38%),
+    radial-gradient(circle at 18% -10%, rgba(157, 241, 107, 0.13), transparent 32rem),
+    #091013;
+  --grid-line: rgba(255, 255, 255, 0.045);
+  --scroll-track: rgba(255, 255, 255, 0.05);
+  --shadow-terminal: 0 24px 90px rgba(0, 0, 0, .34);
+  background: #091013;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --color-ink: 248 251 252;
+  --color-panel: 255 255 255;
+  --color-panel2: 237 245 247;
+  --color-grid: 199 215 221;
+  --body-text: #10202a;
+  --body-bg:
+    linear-gradient(180deg, rgba(53, 213, 223, 0.12), transparent 34%),
+    radial-gradient(circle at 18% -10%, rgba(157, 241, 107, 0.2), transparent 30rem),
+    #f4f8fa;
+  --grid-line: rgba(10, 33, 42, 0.08);
+  --scroll-track: rgba(10, 33, 42, 0.06);
+  --shadow-terminal: 0 22px 72px rgba(36, 64, 74, .18);
+  background: #f4f8fa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  color: var(--body-text);
+  background: var(--body-bg);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.terminal-grid {
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+.scrollbar-thin {
+  scrollbar-color: rgba(53, 213, 223, 0.38) var(--scroll-track);
+  scrollbar-width: thin;
+}
+
+[data-theme="light"] .text-white,
+[data-theme="light"] .text-slate-100 {
+  color: #10202a;
+}
+
+[data-theme="light"] .text-slate-200 {
+  color: #22313b;
+}
+
+[data-theme="light"] .text-slate-300 {
+  color: #334653;
+}
+
+[data-theme="light"] .text-slate-400 {
+  color: #627482;
+}
+
+[data-theme="light"] .text-slate-500 {
+  color: #7b8b96;
+}
+
+[data-theme="light"] .text-ink {
+  color: #071014;
+}
+
+[data-theme="light"] .text-lime {
+  color: #1f7a24;
+}
+
+[data-theme="light"] input,
+[data-theme="light"] select {
+  color-scheme: light;
+}
