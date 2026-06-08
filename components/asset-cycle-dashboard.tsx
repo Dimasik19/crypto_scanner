@@ -30,6 +30,8 @@ interface StoredSelectionState {
 interface OhlcvPayload {
   candles?: Candle[];
   error?: string;
+  source?: string;
+  sourceSymbols?: string[];
 }
 
 interface HeatMapCell {
@@ -39,6 +41,7 @@ interface HeatMapCell {
   averagePrice: number;
   deviationPct: number;
   zone: ReturnType<typeof getDecisionZone>;
+  source: string;
 }
 
 type StoredTrade = Partial<Omit<Trade, "quoteAsset">> & {
@@ -531,6 +534,9 @@ function HeatMapDrawer({
   const [cells, setCells] = useState<HeatMapCell[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [failedCount, setFailedCount] = useState(0);
 
   useEffect(() => {
     if (!open) return;
@@ -539,29 +545,42 @@ function HeatMapDrawer({
     async function loadHeatMap() {
       setLoading(true);
       setError(null);
+      setFailedCount(0);
+      const requestId = Date.now();
 
       try {
         const results = await Promise.all(getQuoteAssets(baseAsset).map(async (quoteAsset) => {
-          const response = await fetch(`/api/ohlcv?base=${baseAsset}&quote=${quoteAsset}&range=${range}`);
-          const payload = (await response.json()) as OhlcvPayload;
-          if (!response.ok || !payload.candles || payload.candles.length === 0) return null;
+          try {
+            const response = await fetch(`/api/ohlcv?base=${baseAsset}&quote=${quoteAsset}&range=${range}&refresh=1&t=${requestId}`, {
+              cache: "no-store"
+            });
+            const payload = (await response.json()) as OhlcvPayload;
+            if (!response.ok || !payload.candles || payload.candles.length === 0) return null;
 
-          const currentPrice = payload.candles.at(-1)?.close ?? 0;
-          const averagePrice = payload.candles.reduce((sum, candle) => sum + candle.close, 0) / payload.candles.length;
-          const levels = calculateRangeLevels(payload.candles);
+            const currentPrice = payload.candles.at(-1)?.close ?? 0;
+            const averagePrice = payload.candles.reduce((sum, candle) => sum + candle.close, 0) / payload.candles.length;
+            const levels = calculateRangeLevels(payload.candles);
 
-          return {
-            pair: formatPair(quoteAsset, baseAsset),
-            quoteAsset,
-            currentPrice,
-            averagePrice,
-            deviationPct: averagePrice > 0 ? ((currentPrice - averagePrice) / averagePrice) * 100 : 0,
-            zone: getDecisionZone(currentPrice, levels)
-          };
+            return {
+              pair: formatPair(quoteAsset, baseAsset),
+              quoteAsset,
+              currentPrice,
+              averagePrice,
+              deviationPct: averagePrice > 0 ? ((currentPrice - averagePrice) / averagePrice) * 100 : 0,
+              zone: getDecisionZone(currentPrice, levels),
+              source: payload.source ?? "market-data"
+            };
+          } catch {
+            return null;
+          }
         }));
 
         if (!cancelled) {
-          setCells(results.filter((cell): cell is HeatMapCell => cell !== null));
+          const nextCells = results.filter((cell): cell is HeatMapCell => cell !== null);
+          setCells(nextCells);
+          setFailedCount(results.length - nextCells.length);
+          setLastUpdatedAt(new Date());
+          if (nextCells.length === 0) setError("Failed to load heat map");
         }
       } catch (requestError) {
         if (!cancelled) {
@@ -576,7 +595,7 @@ function HeatMapDrawer({
     return () => {
       cancelled = true;
     };
-  }, [baseAsset, open, range]);
+  }, [baseAsset, open, range, refreshNonce]);
 
   return (
     <>
@@ -586,7 +605,10 @@ function HeatMapDrawer({
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-grid px-5 py-4">
             <div>
               <h2 className="text-lg font-semibold uppercase text-white">{baseAsset} HeatMap</h2>
-              <p className="font-mono text-xs text-slate-500">Current base price in quote asset units, deviation from selected-period average.</p>
+              <p className="font-mono text-xs text-slate-500">
+                {lastUpdatedAt ? `Updated ${lastUpdatedAt.toLocaleTimeString()}` : "Current base price in quote asset units"}
+                {failedCount > 0 ? ` · ${failedCount} pairs skipped` : ""}
+              </p>
             </div>
             <div className="flex items-center gap-3">
               <div className="grid grid-cols-3 border border-grid bg-panel p-1">
@@ -600,6 +622,14 @@ function HeatMapDrawer({
                   </button>
                 ))}
               </div>
+              <button
+                className="flex h-9 w-9 items-center justify-center border border-grid text-slate-300 hover:border-cyan/70 hover:text-cyan disabled:opacity-50"
+                onClick={() => setRefreshNonce((value) => value + 1)}
+                disabled={loading}
+                aria-label="Refresh heat map"
+              >
+                <RefreshCw className={loading ? "animate-spin" : ""} size={16} />
+              </button>
               <button className="flex h-9 w-9 items-center justify-center border border-grid text-slate-300 hover:border-danger/70 hover:text-danger" onClick={onClose} aria-label="Close heat map">
                 <X size={17} />
               </button>
@@ -646,6 +676,7 @@ function HeatMapCard({ cell, onSelect }: { cell: HeatMapCell; onSelect: () => vo
         {cell.deviationPct > 0 ? "+" : ""}{cell.deviationPct.toFixed(2)}%
       </div>
       <div className="mt-2 font-mono text-xs text-slate-500">vs average {formatPrice(cell.averagePrice)}</div>
+      <div className="mt-3 font-mono text-[11px] uppercase text-slate-500">{cell.source}</div>
     </button>
   );
 }
